@@ -3,6 +3,7 @@ import style from "../css/ContextMenu.module.css";
 import { IconAtom } from "./Icon";
 import { FormattedMessage } from "react-intl";
 import { CodeViewer } from "./CodeViewer";
+import { AccordionAtom } from "./Accordion";
 
 type SchemaValidity = "UNKNOWN" | "VALID" | "INVALID";
 
@@ -15,6 +16,8 @@ export interface ECViewerProps {
   headerValidationFn?: (header: object) => Promise<[boolean, string | undefined]>;
   schemaUrl?: string;
   headerSchemaUrl?: string;
+  checksElement?: React.ReactNode;
+  checksLabelId?: string;
 }
 
 export const JWTViewer = ({
@@ -26,6 +29,8 @@ export const JWTViewer = ({
   headerValidationFn,
   schemaUrl,
   headerSchemaUrl,
+  checksElement,
+  checksLabelId = "entity_configuration_checks",
 }: ECViewerProps) => {
   const [schemaValidity, setSchemaValidity] =
     useState<SchemaValidity>("UNKNOWN");
@@ -252,6 +257,20 @@ export const JWTViewer = ({
           </div>
         </div>
       </div>
+
+      {/* Security / Trust Mark checks — collapsed by default */}
+      {checksElement && (
+        <div className="row" style={{ padding: "4px 0" }}>
+          <div className="col">
+            <AccordionAtom
+              accordinId={`${id}-security-checks`}
+              labelId={checksLabelId}
+              show={false}
+              hiddenElement={checksElement}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

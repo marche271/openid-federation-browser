@@ -13,6 +13,10 @@ import { TrustMarkListing } from "./TrustMarkListing";
 import { getEntityTypes } from "../lib/openid-federation/utils";
 import { cleanEntityID, fmtValidity, timestampToLocaleString } from "../lib/utils";
 import style from "../css/ContextMenu.module.css";
+import { EntityChecks } from "./EntityChecks";
+import { CheckResult, runEntityConfigurationChecks } from "../lib/openid-federation/checks";
+import { TrustMarkChecks } from "./TrustMarkChecks";
+import { TrustMarkCheckResult, TrustMarkContext, parseTrustMark, runTrustMarkChecks } from "../lib/openid-federation/trustMarkChecks";
 
 export interface NodeMenuProps {
   data: GraphNode;
@@ -60,6 +64,18 @@ export const NodeMenuAtom = ({
   );
   const [advancedParams, setAdvancedParams] = useState<boolean>(false);
   const [display, setDisplay] = useState(true);
+
+  // Entity Configuration checks
+  const [ecChecks, setEcChecks] = useState<CheckResult[] | null>(null);
+  const [ecChecksLoading, setEcChecksLoading] = useState(false);
+
+  // Trust Mark checks
+  const [tmChecksMap, setTmChecksMap] = useState<
+    Map<number, TrustMarkCheckResult[]>
+  >(new Map());
+  const [tmChecksLoadingSet, setTmChecksLoadingSet] = useState<Set<number>>(
+    new Set(),
+  );
 
   const removeEntities = (entityIDs: string[]) => onNodesRemove(entityIDs);
 
@@ -126,8 +142,8 @@ export const NodeMenuAtom = ({
 
   const validateTM = async (tm: object): Promise<[boolean, string | undefined]> => {
     const validation = await validateTrustMark(tm);
-    return [(validation[0] && data.info.ec.valid), validation[1]];
-  }
+    return [validation[0] && data.info.ec.valid, validation[1]];
+  };
 
   useEffect(() => {
     if (toDiscoverList.length === 0) return;
@@ -167,6 +183,78 @@ export const NodeMenuAtom = ({
       data.info.ec.payload.metadata?.federation_entity
         ?.federation_trust_mark_list_endpoint,
     );
+
+    // Entity Configuration checks
+    setEcChecks(null);
+    setEcChecksLoading(true);
+    runEntityConfigurationChecks(data.info.ec).then((results) => {
+      setEcChecks(results);
+      setEcChecksLoading(false);
+    });
+
+    // Trust Mark checks
+    const rawMarks = data.info.trustMarks ?? [];
+    if (rawMarks.length === 0) {
+      setTmChecksMap(new Map());
+      setTmChecksLoadingSet(new Set());
+      return;
+    }
+
+    // Mark all trust marks as loading
+    setTmChecksLoadingSet(new Set(rawMarks.map((_, i) => i)));
+    setTmChecksMap(new Map());
+
+    rawMarks.forEach((tm, idx) => {
+      const parsed = parseTrustMark(tm.jwt);
+
+      if (!parsed) {
+        // Unparseable JWT — store a single hard-fail immediately
+        setTmChecksMap((prev) => {
+          const next = new Map(prev);
+          next.set(idx, [
+            {
+              id: "tm_parse",
+              labelId: "tm_check_jwt_signature",
+              status: "fail",
+              detailId: "tm_check_jwt_sig_fail",
+            },
+          ]);
+          return next;
+        });
+        setTmChecksLoadingSet((prev) => {
+          const next = new Set(prev);
+          next.delete(idx);
+          return next;
+        });
+        return;
+      }
+
+      // Provide the entity's own JWKS as issuer JWKS when iss === sub
+      const ecSub = data.info.ec.payload?.sub as string | undefined;
+      const issuerJwks =
+        parsed.payload.iss && parsed.payload.iss === ecSub
+          ? (data.info.ec.payload?.jwks as { keys: never[] } | undefined)
+          : undefined;
+
+      const ctx: TrustMarkContext = {
+        ecSub,
+        outerId: tm.id,
+        issuerJwks,
+      };
+
+      runTrustMarkChecks(parsed, ctx).then((results) => {
+        setTmChecksMap((prev) => {
+          const next = new Map(prev);
+          next.set(idx, results);
+          return next;
+        });
+        setTmChecksLoadingSet((prev) => {
+          const next = new Set(prev);
+          next.delete(idx);
+          return next;
+        });
+      });
+    });
   }, [data]);
 
   const displayedInfo = [
@@ -311,6 +399,13 @@ export const NodeMenuAtom = ({
                 headerValidationFn={validateHeaderEntityConfiguration}
                 schemaUrl={`${import.meta.env.VITE_ENTITY_CONFIG_SCHEMA}`}
                 headerSchemaUrl={`${import.meta.env.VITE_ENTITY_HEADER_SCHEMA}`}
+                checksLabelId="entity_configuration_checks"
+                checksElement={
+                  <EntityChecks
+                    results={ecChecks ?? []}
+                    loading={ecChecksLoading}
+                  />
+                }
               />
             }
           />
@@ -340,6 +435,14 @@ export const NodeMenuAtom = ({
                             headerValidationFn={validateHeaderTrustMark}
                             schemaUrl={`${import.meta.env.VITE_TRUST_MARK_SCHEMA}`}
                             headerSchemaUrl={`${import.meta.env.VITE_ENTITY_HEADER_SCHEMA}`}
+                            checksLabelId="trust_mark_checks"
+                            checksElement={
+                              <TrustMarkChecks
+                                trustMarkId={tm.id}
+                                results={tmChecksMap.get(i) ?? []}
+                                loading={tmChecksLoadingSet.has(i)}
+                              />
+                            }
                           />
                         }
                       />
